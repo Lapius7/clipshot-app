@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -12,7 +13,82 @@ import (
 	"github.com/Lapius7/clipshot-app/internal/credstore"
 )
 
-var procMessageBoxW = user32.NewProc("MessageBoxW")
+var (
+	procMessageBoxW          = user32.NewProc("MessageBoxW")
+	procSendMessageW         = user32.NewProc("SendMessageW")
+	procSystemParametersInfo = user32.NewProc("SystemParametersInfoW")
+	gdi32                    = syscall.NewLazyDLL("gdi32.dll")
+	procCreateFontIndirectW  = gdi32.NewProc("CreateFontIndirectW")
+)
+
+const wmSetFont = 0x0030
+
+// uiFont is the system message-box font (matches what Explorer/most modern
+// apps use), applied to every control instead of the legacy default GUI
+// font that made the old dialog look dated.
+var uiFont uintptr
+
+// nonClientMetrics mirrors NONCLIENTMETRICSW, trimmed to the fields needed
+// to pull lfMessageFont out via SystemParametersInfo(SPI_GETNONCLIENTMETRICS).
+type nonClientMetrics struct {
+	cbSize          uint32
+	borderWidth     int32
+	scrollWidth     int32
+	scrollHeight    int32
+	captionWidth    int32
+	captionHeight   int32
+	captionFont     logFont
+	smCaptionWidth  int32
+	smCaptionHeight int32
+	smCaptionFont   logFont
+	menuWidth       int32
+	menuHeight      int32
+	menuFont        logFont
+	statusFont      logFont
+	messageFont     logFont
+}
+
+type logFont struct {
+	height         int32
+	width          int32
+	escapement     int32
+	orientation    int32
+	weight         int32
+	italic         byte
+	underline      byte
+	strikeOut      byte
+	charSet        byte
+	outPrecision   byte
+	clipPrecision  byte
+	quality        byte
+	pitchAndFamily byte
+	faceName       [32]uint16
+}
+
+const spiGetNonClientMetrics = 0x0029
+
+func loadUIFont() uintptr {
+	if uiFont != 0 {
+		return uiFont
+	}
+	var ncm nonClientMetrics
+	ncm.cbSize = uint32(unsafe.Sizeof(ncm))
+	ret, _, _ := procSystemParametersInfo.Call(spiGetNonClientMetrics, uintptr(ncm.cbSize), uintptr(unsafe.Pointer(&ncm)), 0)
+	if ret == 0 {
+		return 0
+	}
+	hFont, _, _ := procCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&ncm.messageFont)))
+	uiFont = hFont
+	return uiFont
+}
+
+func applyFont(hwnd uintptr) {
+	font := loadUIFont()
+	if font == 0 {
+		return
+	}
+	procSendMessageW.Call(hwnd, wmSetFont, font, 1)
+}
 
 const (
 	mbOK       = 0x0
@@ -50,7 +126,20 @@ var (
 )
 
 func ShowSettings(cfg *config.Config) {
-	res := showSettingsDialog(cfg)
+	// The dialog creates a window and runs its own GetMessageW loop, both of
+	// which must stay pinned to one OS thread for the duration of the
+	// dialog's life. Running this on a dedicated, locked OS thread keeps it
+	// isolated from systray's own message pump and from Go's scheduler
+	// migrating the goroutine mid-loop, which previously caused the dialog
+	// to hang intermittently.
+	resCh := make(chan settingsResult, 1)
+	go func() {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		resCh <- showSettingsDialog(cfg)
+	}()
+	res := <-resCh
+
 	if !res.ok {
 		return
 	}
@@ -100,13 +189,18 @@ func showSettingsDialog(cfg *config.Config) settingsResult {
 	}
 	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
 
+	const (
+		winWidth  = 520
+		winHeight = 340
+	)
+
 	titleW, _ := syscall.UTF16PtrFromString("ClipShot Settings")
 	hwnd, _, _ := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(titleW)),
-		uintptr(wsOverlappedWindow|wsVisible),
-		0x80000000, 0x80000000, 460, 280,
+		uintptr(wsOverlappedWindow&^0x00020000|wsVisible), // drop WS_MAXIMIZEBOX, dialog isn't resizable
+		0x80000000, 0x80000000, winWidth, winHeight,
 		0, 0, hInstance, 0,
 	)
 
@@ -114,55 +208,58 @@ func showSettingsDialog(cfg *config.Config) settingsResult {
 	staticClass, _ := syscall.UTF16PtrFromString("STATIC")
 	buttonClass, _ := syscall.UTF16PtrFromString("BUTTON")
 	groupBoxClass, _ := syscall.UTF16PtrFromString("BUTTON")
-	okText, _ := syscall.UTF16PtrFromString("OK")
-	cancelText, _ := syscall.UTF16PtrFromString("Cancel")
+
+	const (
+		marginX = 16
+		fieldX  = 130
+		fieldW  = 350
+		labelW  = 100
+		groupW  = winWidth - 2*marginX - 14
+	)
+
+	all := make([]uintptr, 0, 16)
+	create := func(class *uint16, text string, style uint32, x, y, w, h int32, id uintptr) uintptr {
+		var textPtr uintptr
+		if text != "" {
+			p, _ := syscall.UTF16PtrFromString(text)
+			textPtr = uintptr(unsafe.Pointer(p))
+		}
+		h2, _, _ := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(class)), textPtr,
+			uintptr(style), uintptr(x), uintptr(y), uintptr(w), uintptr(h), hwnd, id, hInstance, 0)
+		all = append(all, h2)
+		return h2
+	}
 
 	// Connection group
-	connGroup, _ := syscall.UTF16PtrFromString("Connection")
-	procCreateWindowExW.Call(0x00000004, uintptr(unsafe.Pointer(groupBoxClass)), uintptr(unsafe.Pointer(connGroup)),
-		uintptr(wsChild|wsVisible|0x00000007), 10, 5, 430, 105, hwnd, 0, hInstance, 0)
+	create(groupBoxClass, "Connection", wsChild|wsVisible|0x00000007, marginX, 12, groupW, 110, 0)
 
-	urlLabel, _ := syscall.UTF16PtrFromString("Server URL:")
-	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(urlLabel)),
-		uintptr(wsChild|wsVisible), 25, 25, 100, 18, hwnd, 0, hInstance, 0)
-	urlDefault, _ := syscall.UTF16PtrFromString(cfg.InstanceURL)
-	urlEdit, _, _ := procCreateWindowExW.Call(0x200, uintptr(unsafe.Pointer(editClass)), uintptr(unsafe.Pointer(urlDefault)),
-		uintptr(wsChild|wsVisible|wsTabStop|0x800000|0x00800000), 125, 22, 300, 22, hwnd, uintptr(idSettingsEditURL), hInstance, 0)
+	create(staticClass, "Server URL:", wsChild|wsVisible, marginX+16, 38, labelW, 18, 0)
+	urlEdit := create(editClass, cfg.InstanceURL, wsChild|wsVisible|wsTabStop|0x00800000, fieldX, 35, fieldW, 22, idSettingsEditURL)
 	settingsHwnd[0] = urlEdit
 
-	tokenLabel, _ := syscall.UTF16PtrFromString("API Token:")
-	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(tokenLabel)),
-		uintptr(wsChild|wsVisible), 25, 55, 100, 18, hwnd, 0, hInstance, 0)
-	tokenEdit, _, _ := procCreateWindowExW.Call(0x200, uintptr(unsafe.Pointer(editClass)), 0,
-		uintptr(wsChild|wsVisible|wsTabStop|0x800000|0x00800000), 125, 52, 300, 22, hwnd, uintptr(idSettingsEditToken), hInstance, 0)
+	create(staticClass, "API Token:", wsChild|wsVisible, marginX+16, 68, labelW, 18, 0)
+	tokenEdit := create(editClass, "", wsChild|wsVisible|wsTabStop|0x00800000, fieldX, 65, fieldW, 22, idSettingsEditToken)
 	settingsHwnd[1] = tokenEdit
 
-	tokenHint, _ := syscall.UTF16PtrFromString("(leave blank to keep current)")
-	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(tokenHint)),
-		uintptr(wsChild|wsVisible), 125, 76, 300, 16, hwnd, 0, hInstance, 0)
+	create(staticClass, "(leave blank to keep current)", wsChild|wsVisible, fieldX, 92, fieldW, 16, 0)
 
 	// Hotkey group
-	hkGroup, _ := syscall.UTF16PtrFromString("Hotkey")
-	procCreateWindowExW.Call(0x00000004, uintptr(unsafe.Pointer(groupBoxClass)), uintptr(unsafe.Pointer(hkGroup)),
-		uintptr(wsChild|wsVisible|0x00000007), 10, 115, 430, 65, hwnd, 0, hInstance, 0)
+	create(groupBoxClass, "Hotkey", wsChild|wsVisible|0x00000007, marginX, 134, groupW, 70, 0)
 
-	hotkeyLabel, _ := syscall.UTF16PtrFromString("Shortcut:")
-	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(hotkeyLabel)),
-		uintptr(wsChild|wsVisible), 25, 138, 100, 18, hwnd, 0, hInstance, 0)
-	hotkeyDefault, _ := syscall.UTF16PtrFromString(cfg.Hotkey)
-	hotkeyEdit, _, _ := procCreateWindowExW.Call(0x200, uintptr(unsafe.Pointer(editClass)), uintptr(unsafe.Pointer(hotkeyDefault)),
-		uintptr(wsChild|wsVisible|wsTabStop|0x800000|0x00800000), 125, 135, 150, 22, hwnd, uintptr(idSettingsEditHotkey), hInstance, 0)
+	create(staticClass, "Shortcut:", wsChild|wsVisible, marginX+16, 162, labelW, 18, 0)
+	hotkeyEdit := create(editClass, cfg.Hotkey, wsChild|wsVisible|wsTabStop|0x00800000, fieldX, 159, 160, 22, idSettingsEditHotkey)
 	settingsHwnd[2] = hotkeyEdit
 
-	hotkeyHint, _ := syscall.UTF16PtrFromString("e.g. Ctrl+Shift+U")
-	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(hotkeyHint)),
-		uintptr(wsChild|wsVisible), 285, 138, 140, 18, hwnd, 0, hInstance, 0)
+	create(staticClass, "e.g. Ctrl+Shift+U", wsChild|wsVisible, fieldX+172, 162, 180, 18, 0)
 
-	// Buttons
-	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(buttonClass)), uintptr(unsafe.Pointer(okText)),
-		uintptr(wsChild|wsVisible|wsTabStop|0x00000001), 260, 195, 80, 28, hwnd, uintptr(idSettingsOK), hInstance, 0)
-	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(buttonClass)), uintptr(unsafe.Pointer(cancelText)),
-		uintptr(wsChild|wsVisible|wsTabStop|0x00000001), 350, 195, 80, 28, hwnd, uintptr(idSettingsCancel), hInstance, 0)
+	// Buttons (bottom-right)
+	btnW, btnH := int32(88), int32(30)
+	create(buttonClass, "OK", wsChild|wsVisible|wsTabStop|0x00000001, winWidth-2*btnW-32, winHeight-66, btnW, btnH, idSettingsOK)
+	create(buttonClass, "Cancel", wsChild|wsVisible|wsTabStop|0x00000001, winWidth-btnW-16, winHeight-66, btnW, btnH, idSettingsCancel)
+
+	for _, h := range all {
+		applyFont(h)
+	}
 
 	procSetFocus.Call(urlEdit)
 
