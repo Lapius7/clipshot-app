@@ -1,5 +1,9 @@
+//go:build !windows
+
 // Package notify shows brief feedback by temporarily changing the system
-// tray icon's tooltip text.
+// tray icon's tooltip text. This is a non-Windows fallback so the package
+// still cross-compiles; ClipShot itself only ships for Windows, where
+// notify_windows.go's balloon notifications are used instead.
 package notify
 
 import (
@@ -17,7 +21,7 @@ var (
 	lastMsg string
 )
 
-func Show(message string) {
+func show(message string) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -35,3 +39,6 @@ func Show(message string) {
 		}
 	})
 }
+
+func ShowInfo(message string)  { show(message) }
+func ShowError(message string) { show(message) }
