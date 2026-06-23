@@ -88,7 +88,7 @@ Copy `clipshot.exe` anywhere on the target Windows machine and run it.
 
 1. Run `clipshot.exe`. A tray icon appears — there's no main window.
 2. Right-click the tray icon → **Settings**.
-3. You'll be prompted for three values in sequence:
+3. Enter the following three values:
    - **Instance URL** — your clipshot-server's public address, e.g. `https://img.example.com`. Must start with `https://`; anything else is rejected.
    - **API Token** — a token issued by your server's admin (`clipshot-server token create`, see [clipshot-server's README](https://github.com/Lapius7/clipshot-server#token-management)). Leave blank to keep whatever token is already stored for that instance URL.
    - **Hotkey** — the global key combo that triggers a clipboard upload, e.g. `Ctrl+Shift+U` (the default). Must be one or more of `Ctrl`/`Alt`/`Shift`/`Win` followed by a single character; invalid combos are rejected before saving.

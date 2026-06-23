@@ -88,7 +88,7 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
 
 1. `clipshot.exe` を実行します。トレイアイコンが表示されます — メインウィンドウはありません。
 2. トレイアイコンを右クリック → **Settings**。
-3. 順番に3つの値の入力を求められます:
+3. 以下の3つの値を入力します:
    - **Instance URL** — あなたのclipshot-serverの公開アドレス。例: `https://img.example.com`。`https://` で始まる必要があり、それ以外は拒否されます。
    - **API Token** — サーバーの管理者が発行したトークン（`clipshot-server token create`、[clipshot-serverのREADME](https://github.com/Lapius7/clipshot-server/blob/main/README.ja.md#トークン管理)参照）。空欄のままにすると、そのインスタンスURLに既に保存されているトークンが維持されます。
    - **Hotkey** — クリップボードアップロードを実行するグローバルショートカットキーの組み合わせ。例: `Ctrl+Shift+U`（デフォルト）。`Ctrl`/`Alt`/`Shift`/`Win` のいずれか1つ以上＋1文字のキーで構成される必要があり、無効な組み合わせは保存前に拒否されます。
