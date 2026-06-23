@@ -1,7 +1,11 @@
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
+
 [Setup]
 AppId={{B8A4E3D1-5F7A-4C9B-A6D2-8E1F3C5B7A90}
 AppName=ClipShot
-AppVersion=0.1.1
+AppVersion={#AppVersion}
 AppPublisher=Lapius7
 AppPublisherURL=https://github.com/Lapius7/clipshot-app
 DefaultDirName={autopf}\ClipShot

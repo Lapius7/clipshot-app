@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build clipshot.exe
+        run: |
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o clipshot.exe ./cmd/clipshot/...
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build installer
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion="${VERSION}" /DOutputDir=installer installer.iss
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          sha256sum clipshot.exe > SHA256SUMS.txt
+          sha256sum installer/clipshot-setup-*.exe >> SHA256SUMS.txt
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            clipshot.exe
+            installer/clipshot-setup-*.exe
+            SHA256SUMS.txt
+          draft: false
+          prerelease: false
