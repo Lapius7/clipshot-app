@@ -22,6 +22,7 @@ var (
 	procRegisterClassExW = user32.NewProc("RegisterClassExW")
 	procCreateWindowExW  = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW   = user32.NewProc("DefWindowProcW")
+	procCreateIcon       = user32.NewProc("CreateIcon")
 	procShellNotifyIconW = shell32.NewProc("Shell_NotifyIconW")
 	procGetModuleHandleW = kernel32.NewProc("GetModuleHandleW")
 )
@@ -30,10 +31,8 @@ const (
 	nimAdd    = 0x00000000
 	nimModify = 0x00000001
 
-	nifInfo  = 0x00000010
-	nifState = 0x00000008
-
-	nisHidden = 0x00000001
+	nifIcon = 0x00000002
+	nifInfo = 0x00000010
 
 	niifInfo  = 0x00000001
 	niifError = 0x00000003
@@ -139,13 +138,19 @@ func run() {
 		return
 	}
 
+	// Balloon notifications are silently suppressed by Windows when the
+	// owning icon is in the NIS_HIDDEN state (confirmed cause of v0.1.8's
+	// balloons logging correctly but never appearing). So this icon must
+	// stay visible; it uses a fully transparent 1x1 bitmap so it doesn't
+	// add a second visible icon next to systray's tray icon.
+	icon := transparentIcon()
+
 	var nid notifyIconDataW
 	nid.cbSize = uint32(unsafe.Sizeof(nid))
 	nid.hWnd = hwnd
 	nid.uID = 1
-	nid.uFlags = nifState
-	nid.dwState = nisHidden
-	nid.dwStateMask = nisHidden
+	nid.uFlags = nifIcon
+	nid.hIcon = icon
 	toUTF16Array(nid.szTip[:], "ClipShot")
 	if ret, _, err := procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid))); ret == 0 {
 		log.Printf("notify: Shell_NotifyIconW(NIM_ADD) failed: %v", err)
@@ -156,9 +161,7 @@ func run() {
 		b.cbSize = uint32(unsafe.Sizeof(b))
 		b.hWnd = hwnd
 		b.uID = 1
-		b.uFlags = nifInfo | nifState
-		b.dwState = nisHidden
-		b.dwStateMask = nisHidden
+		b.uFlags = nifInfo
 		b.dwInfoFlags = req.flags
 		toUTF16Array(b.szInfoTitle[:], req.title)
 		toUTF16Array(b.szInfo[:], req.msg)
@@ -167,6 +170,17 @@ func run() {
 			log.Printf("notify: Shell_NotifyIconW(NIM_MODIFY) failed: %v", err)
 		}
 	}
+}
+
+// transparentIcon builds a 1x1 fully-transparent icon via CreateIcon (AND
+// mask all-1s = transparent, XOR/color bits all-0). Used as the visible
+// (but invisible-looking) notify icon required to make balloons appear.
+func transparentIcon() syscall.Handle {
+	andMask := []byte{0xFF}
+	xorMask := []byte{0x00}
+	h, _, _ := procCreateIcon.Call(0, 1, 1, 1, 1,
+		uintptr(unsafe.Pointer(&andMask[0])), uintptr(unsafe.Pointer(&xorMask[0])))
+	return syscall.Handle(h)
 }
 
 func send(title, msg string, flags uint32) {
