@@ -1,9 +1,9 @@
-//go:build !windows
-
+// Package notify shows brief feedback by temporarily changing the system
+// tray icon's tooltip text.
 package notify
 
 import (
-	"fmt"
+	"sync"
 	"time"
 
 	"github.com/getlantern/systray"
@@ -11,11 +11,27 @@ import (
 
 const resetAfter = 4 * time.Second
 
+var (
+	mu      sync.Mutex
+	timer   *time.Timer
+	lastMsg string
+)
+
 func Show(message string) {
-	fmt.Println(message)
+	mu.Lock()
+	defer mu.Unlock()
+
+	lastMsg = message
 	systray.SetTooltip(message)
-	go func() {
-		time.Sleep(resetAfter)
-		systray.SetTooltip("ClipShot")
-	}()
+
+	if timer != nil {
+		timer.Stop()
+	}
+	timer = time.AfterFunc(resetAfter, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if lastMsg == message {
+			systray.SetTooltip("ClipShot")
+		}
+	})
 }

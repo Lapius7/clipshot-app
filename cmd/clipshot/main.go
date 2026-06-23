@@ -56,10 +56,7 @@ func main() {
 		listener = l
 		go func() {
 			for range ch {
-				go doUpload(cfg, "clipboard.png", func() ([]byte, string, error) {
-					data, err := clipboard.ReadImagePNG()
-					return data, "image/png", err
-				})
+				go uploadFromClipboard(cfg)
 			}
 		}()
 	}
@@ -72,10 +69,7 @@ func main() {
 			}
 			return
 		}
-		go doUpload(cfg, filepath.Base(path), func() ([]byte, string, error) {
-			data, err := os.ReadFile(path)
-			return data, http.DetectContentType(data), err
-		})
+		go uploadFromFile(cfg, path)
 	}
 
 	onSettings := func() {
@@ -93,18 +87,35 @@ func main() {
 	ui.RunTray(trayIcon, onUpload, onSettings, onQuit)
 }
 
-func doUpload(cfg *config.Config, filename string, loadData func() ([]byte, string, error)) {
+func uploadFromClipboard(cfg *config.Config) {
 	notify.Show("ClipShot: Uploading...")
 
-	data, contentType, err := loadData()
+	data, err := clipboard.ReadImagePNG()
 	if err != nil {
 		notify.Show(fmt.Sprintf("ClipShot: %v", err))
 		return
 	}
 
+	uploadAndNotify(cfg, "clipboard.png", "image/png", data)
+}
+
+func uploadFromFile(cfg *config.Config, path string) {
+	notify.Show("ClipShot: Uploading...")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		notify.Show(fmt.Sprintf("ClipShot: Read error: %v", err))
+		return
+	}
+
+	contentType := http.DetectContentType(data)
+	uploadAndNotify(cfg, filepath.Base(path), contentType, data)
+}
+
+func uploadAndNotify(cfg *config.Config, filename, contentType string, data []byte) {
 	token, err := credstore.LoadToken(cfg.InstanceURL)
 	if err != nil {
-		notify.Show("ClipShot: No API token configured")
+		notify.Show("ClipShot: No API token - open Settings")
 		return
 	}
 
@@ -121,7 +132,7 @@ func doUpload(cfg *config.Config, filename string, loadData func() ([]byte, stri
 	}
 
 	if err := clipboard.WriteText(url); err != nil {
-		notify.Show(fmt.Sprintf("ClipShot: Upload OK but clipboard failed: %v", err))
+		notify.Show(fmt.Sprintf("ClipShot: Uploaded but clipboard failed"))
 		return
 	}
 
