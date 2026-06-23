@@ -22,22 +22,23 @@ jobs:
 
       - name: Build clipshot.exe
         run: |
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o clipshot.exe ./cmd/clipshot/...
+          $env:CGO_ENABLED="0"
+          go build -trimpath -ldflags="-s -w" -o clipshot.exe ./cmd/clipshot/...
 
       - name: Install Inno Setup
         run: choco install innosetup -y
 
       - name: Build installer
-        shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAppVersion="${VERSION}" /DOutputDir=installer installer.iss
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DOutputDir=installer" installer.iss
 
       - name: Generate SHA256 checksums
-        shell: bash
         run: |
-          sha256sum clipshot.exe > SHA256SUMS.txt
-          sha256sum installer/clipshot-setup-*.exe >> SHA256SUMS.txt
+          (Get-FileHash clipshot.exe -Algorithm SHA256).Hash.ToLower() + "  clipshot.exe" | Out-File -Encoding ascii SHA256SUMS.txt
+          Get-ChildItem installer/clipshot-setup-*.exe | ForEach-Object {
+            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  " + $_.Name
+          } | Out-File -Encoding ascii -Append SHA256SUMS.txt
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
