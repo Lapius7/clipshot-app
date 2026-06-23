@@ -153,7 +153,7 @@ func main() {
 		}
 		l, ch, err := hotkey.Register(cfg.Hotkey)
 		if err != nil {
-			showError(fmt.Sprintf("Hotkey registration failed (%s): %v", cfg.Hotkey, err))
+			showError(fmt.Sprintf("Hotkey registration failed (%s): %v -- if another ClipShot window/process is running, close it first", cfg.Hotkey, err))
 			return
 		}
 		listener = l
