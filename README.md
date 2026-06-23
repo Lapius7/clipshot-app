@@ -59,7 +59,7 @@ Every step after triggering an upload happens in under a second on a typical bro
 
 ## Installing / building
 
-There's no installer yet (see [Roadmap](#roadmap--known-limitations)) — building from source is the current path.
+Pre-built `clipshot.exe` binaries are available from the [Releases page](https://github.com/Lapius7/clipshot-app/releases). There's no installer yet (see [Roadmap](#roadmap--known-limitations)) — you can also build from source.
 
 ### Requirements
 
@@ -82,7 +82,7 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
 
 Copy `clipshot.exe` anywhere on the target Windows machine and run it.
 
-> **Why no installer / code signing yet?** Both are planned (Inno Setup + a real code-signing certificate so Windows SmartScreen doesn't flag the binary) but are explicitly out of scope for this initial skeleton. See [Roadmap](#roadmap--known-limitations).
+> **Why no installer / code signing yet?** Currently only a bare `clipshot.exe` binary is distributed. An installer (Inno Setup) and code-signing certificate are planned — this will prevent Windows SmartScreen warnings. See [Roadmap](#roadmap--known-limitations).
 
 ## First-time setup
 
