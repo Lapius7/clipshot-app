@@ -126,6 +126,12 @@ var (
 )
 
 func ShowSettings(cfg *config.Config) {
+	// Show whatever token is currently stored so the user can verify it was
+	// saved correctly, instead of always starting from a blank field --
+	// that made it impossible to confirm a re-issued token had actually
+	// been applied without going through a failed upload first.
+	currentToken, _ := credstore.LoadToken(cfg.InstanceURL)
+
 	// The dialog creates a window and runs its own GetMessageW loop, both of
 	// which must stay pinned to one OS thread for the duration of the
 	// dialog's life. Running this on a dedicated, locked OS thread keeps it
@@ -136,7 +142,7 @@ func ShowSettings(cfg *config.Config) {
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
-		resCh <- showSettingsDialog(cfg)
+		resCh <- showSettingsDialog(cfg, currentToken)
 	}()
 	res := <-resCh
 
@@ -173,7 +179,7 @@ func ShowSettings(cfg *config.Config) {
 	messageBox("ClipShot", "Settings saved.", mbOK|mbIconInfo)
 }
 
-func showSettingsDialog(cfg *config.Config) settingsResult {
+func showSettingsDialog(cfg *config.Config, currentToken string) settingsResult {
 	className, _ := syscall.UTF16PtrFromString("ClipShotSettingsDlg")
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
 
@@ -238,10 +244,10 @@ func showSettingsDialog(cfg *config.Config) settingsResult {
 	settingsHwnd[0] = urlEdit
 
 	create(staticClass, "API Token:", wsChild|wsVisible, marginX+16, 68, labelW, 18, 0)
-	tokenEdit := create(editClass, "", wsChild|wsVisible|wsTabStop|0x00800000, fieldX, 65, fieldW, 22, idSettingsEditToken)
+	tokenEdit := create(editClass, currentToken, wsChild|wsVisible|wsTabStop|0x00800000, fieldX, 65, fieldW, 22, idSettingsEditToken)
 	settingsHwnd[1] = tokenEdit
 
-	create(staticClass, "(leave blank to keep current)", wsChild|wsVisible, fieldX, 92, fieldW, 16, 0)
+	create(staticClass, "(shown in plain text -- this PC only)", wsChild|wsVisible, fieldX, 92, fieldW, 16, 0)
 
 	// Hotkey group
 	create(groupBoxClass, "Hotkey", wsChild|wsVisible|0x00000007, marginX, 134, groupW, 70, 0)
