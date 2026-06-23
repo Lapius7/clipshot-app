@@ -27,7 +27,7 @@ func main() {
 	if updated, err := updater.CheckAndUpdate(); err != nil {
 		log.Printf("update check failed: %v", err)
 	} else if updated {
-		notify.Show("ClipShot updated! Restarting...")
+		notify.ShowInfo("Updated! Restarting...")
 		exePath, _ := os.Executable()
 		os.StartProcess(exePath, os.Args, &os.ProcAttr{Dir: filepath.Dir(exePath)})
 		return
@@ -65,7 +65,7 @@ func main() {
 		path, err := ui.PickImageFile()
 		if err != nil {
 			if !errors.Is(err, ui.ErrNoFileSelected) {
-				notify.Show(fmt.Sprintf("ClipShot: %v", err))
+				notify.ShowError(err.Error())
 			}
 			return
 		}
@@ -88,11 +88,11 @@ func main() {
 }
 
 func uploadFromClipboard(cfg *config.Config) {
-	notify.Show("ClipShot: Uploading...")
+	notify.ShowInfo("Uploading...")
 
 	data, err := clipboard.ReadImagePNG()
 	if err != nil {
-		notify.Show(fmt.Sprintf("ClipShot: %v", err))
+		notify.ShowError(err.Error())
 		return
 	}
 
@@ -100,11 +100,11 @@ func uploadFromClipboard(cfg *config.Config) {
 }
 
 func uploadFromFile(cfg *config.Config, path string) {
-	notify.Show("ClipShot: Uploading...")
+	notify.ShowInfo("Uploading...")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		notify.Show(fmt.Sprintf("ClipShot: Read error: %v", err))
+		notify.ShowError(fmt.Sprintf("Read error: %v", err))
 		return
 	}
 
@@ -115,26 +115,26 @@ func uploadFromFile(cfg *config.Config, path string) {
 func uploadAndNotify(cfg *config.Config, filename, contentType string, data []byte) {
 	token, err := credstore.LoadToken(cfg.InstanceURL)
 	if err != nil {
-		notify.Show("ClipShot: No API token - open Settings")
+		notify.ShowError("No API token - open Settings")
 		return
 	}
 
 	client, err := uploader.New(cfg.InstanceURL, token)
 	if err != nil {
-		notify.Show(fmt.Sprintf("ClipShot: %v", err))
+		notify.ShowError(err.Error())
 		return
 	}
 
 	url, err := client.Upload(filename, contentType, data)
 	if err != nil {
-		notify.Show(fmt.Sprintf("ClipShot: Upload failed: %v", err))
+		notify.ShowError(fmt.Sprintf("Upload failed: %v", err))
 		return
 	}
 
 	if err := clipboard.WriteText(url); err != nil {
-		notify.Show(fmt.Sprintf("ClipShot: Uploaded but clipboard failed"))
+		notify.ShowError("Uploaded but clipboard failed")
 		return
 	}
 
-	notify.Show("ClipShot: URL copied!")
+	notify.ShowInfo("URL copied!")
 }
