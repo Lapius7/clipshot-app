@@ -20,7 +20,24 @@ import (
 
 var version = "dev"
 
+// initLogFile redirects the standard logger to clipshot.log next to the
+// executable. The app is built with -H windowsgui (no console), so without
+// this, log.Printf output (including notify's Shell_NotifyIconW failures)
+// went nowhere and silent failures were undebuggable.
+func initLogFile() {
+	exePath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	f, err := os.Create(filepath.Join(filepath.Dir(exePath), "clipshot.log"))
+	if err != nil {
+		return
+	}
+	log.SetOutput(f)
+}
+
 func main() {
+	initLogFile()
 	ui.ValidateHotkey = hotkey.Validate
 	updater.SetVersion(version)
 
