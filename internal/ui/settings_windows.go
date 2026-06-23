@@ -1,8 +1,5 @@
 //go:build windows
 
-// Package ui implements the system tray menu and a native settings dialog
-// built directly on Win32 APIs so the whole app stays CGO-free and
-// cross-compiles cleanly from non-Windows hosts.
 package ui
 
 import (
@@ -29,35 +26,29 @@ func messageBox(title, text string, flags uint32) {
 	procMessageBox.Call(0, uintptr(unsafe.Pointer(m)), uintptr(unsafe.Pointer(t)), uintptr(flags))
 }
 
-// ValidateHotkey is provided by the hotkey package's combo parser; declared
-// here as a function value to avoid an import cycle (internal/hotkey does
-// not depend on internal/ui).
 var ValidateHotkey func(combo string) error
 
-// settingsResult holds the values returned from the settings dialog.
 type settingsResult struct {
-	url     string
-	token   string
-	hotkey  string
-	ok      bool
+	url    string
+	token  string
+	hotkey string
+	ok     bool
 }
 
 const (
-	idSettingsEditURL    = 100
-	idSettingsEditToken  = 101
-	idSettingsEditHotkey = 102
-	idSettingsOK         = 110
-	idSettingsCancel     = 111
+	idSettingsEditURL    = 200
+	idSettingsEditToken  = 201
+	idSettingsEditHotkey = 202
+	idSettingsOK         = 210
+	idSettingsCancel     = 211
 )
 
 var (
 	settingsMu   sync.Mutex
 	settingsData settingsResult
-	settingsHwnd [3]uintptr // URL, Token, Hotkey edit handles
+	settingsHwnd [3]uintptr
 )
 
-// ShowSettings displays a single dialog with all three configuration fields
-// (Instance URL, API Token, Hotkey) and saves them on OK.
 func ShowSettings(cfg *config.Config) {
 	res := showSettingsDialog(cfg)
 	if !res.ok {
@@ -94,15 +85,17 @@ func ShowSettings(cfg *config.Config) {
 }
 
 func showSettingsDialog(cfg *config.Config) settingsResult {
-	className, _ := syscall.UTF16PtrFromString("ClipShotSettings")
+	className, _ := syscall.UTF16PtrFromString("ClipShotSettingsDlg")
 	hInstance, _, _ := procGetModuleHandleW.Call(0)
 
 	wndProc := syscall.NewCallback(settingsWndProc)
 
 	wc := wndClassExW{
 		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
+		style:         3, // CS_HREDRAW | CS_VREDRAW
 		lpfnWndProc:   wndProc,
 		hInstance:     syscall.Handle(hInstance),
+		hbrBackground: 16, // COLOR_WINDOW + 1
 		lpszClassName: className,
 	}
 	procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
@@ -113,7 +106,7 @@ func showSettingsDialog(cfg *config.Config) settingsResult {
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(titleW)),
 		uintptr(wsOverlappedWindow|wsVisible),
-		0x80000000, 0x80000000, 440, 250,
+		0x80000000, 0x80000000, 440, 260,
 		0, 0, hInstance, 0,
 	)
 
@@ -126,34 +119,34 @@ func showSettingsDialog(cfg *config.Config) settingsResult {
 	// Instance URL
 	urlLabel, _ := syscall.UTF16PtrFromString("Instance URL (https://...):")
 	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(urlLabel)),
-		uintptr(wsChild|wsVisible|esLeft), 10, 10, 400, 20, hwnd, 0, hInstance, 0)
+		uintptr(wsChild|wsVisible), 10, 10, 400, 18, hwnd, 0, hInstance, 0)
 	urlDefault, _ := syscall.UTF16PtrFromString(cfg.InstanceURL)
-	urlEdit, _, _ := procCreateWindowExW.Call(uintptr(wsBorder), uintptr(unsafe.Pointer(editClass)), uintptr(unsafe.Pointer(urlDefault)),
-		uintptr(wsChild|wsVisible|wsTabStop|wsBorder), 10, 32, 400, 24, hwnd, uintptr(idSettingsEditURL), hInstance, 0)
+	urlEdit, _, _ := procCreateWindowExW.Call(0x200, uintptr(unsafe.Pointer(editClass)), uintptr(unsafe.Pointer(urlDefault)),
+		uintptr(wsChild|wsVisible|wsTabStop|0x800000|0x00800000), 10, 30, 400, 24, hwnd, uintptr(idSettingsEditURL), hInstance, 0)
 	settingsHwnd[0] = urlEdit
 
 	// API Token
 	tokenLabel, _ := syscall.UTF16PtrFromString("API Token (leave blank to keep current):")
 	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(tokenLabel)),
-		uintptr(wsChild|wsVisible|esLeft), 10, 66, 400, 20, hwnd, 0, hInstance, 0)
-	tokenEdit, _, _ := procCreateWindowExW.Call(uintptr(wsBorder), uintptr(unsafe.Pointer(editClass)), 0,
-		uintptr(wsChild|wsVisible|wsTabStop|wsBorder), 10, 88, 400, 24, hwnd, uintptr(idSettingsEditToken), hInstance, 0)
+		uintptr(wsChild|wsVisible), 10, 64, 400, 18, hwnd, 0, hInstance, 0)
+	tokenEdit, _, _ := procCreateWindowExW.Call(0x200, uintptr(unsafe.Pointer(editClass)), 0,
+		uintptr(wsChild|wsVisible|wsTabStop|0x800000|0x00800000), 10, 84, 400, 24, hwnd, uintptr(idSettingsEditToken), hInstance, 0)
 	settingsHwnd[1] = tokenEdit
 
 	// Hotkey
 	hotkeyLabel, _ := syscall.UTF16PtrFromString("Hotkey (e.g. Ctrl+Shift+U):")
 	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(staticClass)), uintptr(unsafe.Pointer(hotkeyLabel)),
-		uintptr(wsChild|wsVisible|esLeft), 10, 122, 400, 20, hwnd, 0, hInstance, 0)
+		uintptr(wsChild|wsVisible), 10, 118, 400, 18, hwnd, 0, hInstance, 0)
 	hotkeyDefault, _ := syscall.UTF16PtrFromString(cfg.Hotkey)
-	hotkeyEdit, _, _ := procCreateWindowExW.Call(uintptr(wsBorder), uintptr(unsafe.Pointer(editClass)), uintptr(unsafe.Pointer(hotkeyDefault)),
-		uintptr(wsChild|wsVisible|wsTabStop|wsBorder), 10, 144, 400, 24, hwnd, uintptr(idSettingsEditHotkey), hInstance, 0)
+	hotkeyEdit, _, _ := procCreateWindowExW.Call(0x200, uintptr(unsafe.Pointer(editClass)), uintptr(unsafe.Pointer(hotkeyDefault)),
+		uintptr(wsChild|wsVisible|wsTabStop|0x800000|0x00800000), 10, 138, 400, 24, hwnd, uintptr(idSettingsEditHotkey), hInstance, 0)
 	settingsHwnd[2] = hotkeyEdit
 
 	// Buttons
 	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(buttonClass)), uintptr(unsafe.Pointer(okText)),
-		uintptr(wsChild|wsVisible|wsTabStop|bsPushButton), 230, 185, 80, 28, hwnd, uintptr(idSettingsOK), hInstance, 0)
+		uintptr(wsChild|wsVisible|wsTabStop|0x00000000), 230, 190, 80, 28, hwnd, uintptr(idSettingsOK), hInstance, 0)
 	procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(buttonClass)), uintptr(unsafe.Pointer(cancelText)),
-		uintptr(wsChild|wsVisible|wsTabStop|bsPushButton), 330, 185, 80, 28, hwnd, uintptr(idSettingsCancel), hInstance, 0)
+		uintptr(wsChild|wsVisible|wsTabStop|0x00000000), 330, 190, 80, 28, hwnd, uintptr(idSettingsCancel), hInstance, 0)
 
 	procSetFocus.Call(urlEdit)
 
@@ -161,14 +154,7 @@ func showSettingsDialog(cfg *config.Config) settingsResult {
 	settingsData = settingsResult{}
 	settingsMu.Unlock()
 
-	var m struct {
-		Hwnd    uintptr
-		Message uint32
-		WParam  uintptr
-		LParam  uintptr
-		Time    uint32
-		Pt      struct{ X, Y int32 }
-	}
+	var m msgStruct
 	for {
 		ret, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if ret == 0 {
@@ -181,6 +167,15 @@ func showSettingsDialog(cfg *config.Config) settingsResult {
 	settingsMu.Lock()
 	defer settingsMu.Unlock()
 	return settingsData
+}
+
+type msgStruct struct {
+	Hwnd    uintptr
+	Message uint32
+	WParam  uintptr
+	LParam  uintptr
+	Time    uint32
+	Pt      struct{ X, Y int32 }
 }
 
 func settingsWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {

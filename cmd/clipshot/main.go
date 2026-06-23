@@ -14,11 +14,24 @@ import (
 	"github.com/Lapius7/clipshot-app/internal/hotkey"
 	"github.com/Lapius7/clipshot-app/internal/notify"
 	"github.com/Lapius7/clipshot-app/internal/ui"
+	"github.com/Lapius7/clipshot-app/internal/updater"
 	"github.com/Lapius7/clipshot-app/internal/uploader"
 )
 
+var version = "dev"
+
 func main() {
 	ui.ValidateHotkey = hotkey.Validate
+	updater.SetVersion(version)
+
+	if updated, err := updater.CheckAndUpdate(); err != nil {
+		log.Printf("update check failed: %v", err)
+	} else if updated {
+		notify.Show("ClipShot updated! Restarting...")
+		exePath, _ := os.Executable()
+		os.StartProcess(exePath, os.Args, &os.ProcAttr{Dir: filepath.Dir(exePath)})
+		return
+	}
 
 	cfg, err := config.Load()
 	if err != nil {

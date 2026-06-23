@@ -23,7 +23,8 @@ jobs:
       - name: Build clipshot.exe
         run: |
           $env:CGO_ENABLED="0"
-          go build -trimpath -ldflags="-s -w" -o clipshot.exe ./cmd/clipshot/...
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          go build -trimpath -ldflags="-H windowsgui -s -w -X main.version=$version" -o clipshot.exe ./cmd/clipshot/...
 
       - name: Install Inno Setup
         run: choco install innosetup -y
