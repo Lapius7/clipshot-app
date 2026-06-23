@@ -39,7 +39,6 @@ func main() {
 	}
 
 	var listener *hotkey.Listener
-	var events <-chan struct{}
 
 	startHotkey := func() {
 		if listener != nil {
@@ -55,18 +54,28 @@ func main() {
 			return
 		}
 		listener = l
-		events = ch
-		go handleHotkeyEvents(cfg, events)
+		go func() {
+			for range ch {
+				go doUpload(cfg, "clipboard.png", func() ([]byte, string, error) {
+					data, err := clipboard.ReadImagePNG()
+					return data, "image/png", err
+				})
+			}
+		}()
 	}
 
 	onUpload := func() {
-		if err := uploadFromFileDialog(cfg); err != nil {
+		path, err := ui.PickImageFile()
+		if err != nil {
 			if !errors.Is(err, ui.ErrNoFileSelected) {
 				notify.Show(fmt.Sprintf("ClipShot: %v", err))
 			}
 			return
 		}
-		notify.Show("ClipShot: URL copied to clipboard")
+		go doUpload(cfg, filepath.Base(path), func() ([]byte, string, error) {
+			data, err := os.ReadFile(path)
+			return data, http.DetectContentType(data), err
+		})
 	}
 
 	onSettings := func() {
@@ -84,58 +93,37 @@ func main() {
 	ui.RunTray(trayIcon, onUpload, onSettings, onQuit)
 }
 
-func handleHotkeyEvents(cfg *config.Config, events <-chan struct{}) {
-	for range events {
-		data, err := clipboard.ReadImagePNG()
-		if err != nil {
-			notify.Show(fmt.Sprintf("ClipShot: %v", err))
-			continue
-		}
-		if err := uploadAndCopyURL(cfg, "clipboard.png", "image/png", data); err != nil {
-			notify.Show(fmt.Sprintf("ClipShot: %v", err))
-			continue
-		}
-		notify.Show("ClipShot: URL copied to clipboard")
-	}
-}
+func doUpload(cfg *config.Config, filename string, loadData func() ([]byte, string, error)) {
+	notify.Show("ClipShot: Uploading...")
 
-func uploadFromFileDialog(cfg *config.Config) error {
-	path, err := ui.PickImageFile()
+	data, contentType, err := loadData()
 	if err != nil {
-		return err
+		notify.Show(fmt.Sprintf("ClipShot: %v", err))
+		return
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
-
-	contentType := http.DetectContentType(data)
-	return uploadAndCopyURL(cfg, filepath.Base(path), contentType, data)
-}
-
-// uploadAndCopyURL loads the configured token, uploads data to the
-// configured instance, and writes the resulting URL to the clipboard. It is
-// shared by both the hotkey (clipboard image) and tray menu (file dialog)
-// upload paths.
-func uploadAndCopyURL(cfg *config.Config, filename, contentType string, data []byte) error {
 	token, err := credstore.LoadToken(cfg.InstanceURL)
 	if err != nil {
-		return fmt.Errorf("no API token configured: %w", err)
+		notify.Show("ClipShot: No API token configured")
+		return
 	}
 
 	client, err := uploader.New(cfg.InstanceURL, token)
 	if err != nil {
-		return err
+		notify.Show(fmt.Sprintf("ClipShot: %v", err))
+		return
 	}
 
 	url, err := client.Upload(filename, contentType, data)
 	if err != nil {
-		return err
+		notify.Show(fmt.Sprintf("ClipShot: Upload failed: %v", err))
+		return
 	}
 
 	if err := clipboard.WriteText(url); err != nil {
-		return fmt.Errorf("upload succeeded but failed to copy url: %w", err)
+		notify.Show(fmt.Sprintf("ClipShot: Upload OK but clipboard failed: %v", err))
+		return
 	}
-	return nil
+
+	notify.Show("ClipShot: URL copied!")
 }
