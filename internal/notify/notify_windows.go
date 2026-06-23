@@ -8,7 +8,8 @@
 package notify
 
 import (
-	"sync"
+	"log"
+	"runtime"
 	"syscall"
 	"unsafe"
 )
@@ -73,10 +74,25 @@ type notifyIconDataW struct {
 	hBalloonIcon     syscall.Handle
 }
 
-var (
-	initOnce sync.Once
-	hwnd     uintptr
-)
+type balloonRequest struct {
+	title string
+	msg   string
+	flags uint32
+}
+
+// requests is drained by a single dedicated, OS-thread-locked goroutine
+// (see init/run below). Shell_NotifyIconW and the window that owns the
+// notify icon must stay on the same OS thread for the lifetime of the
+// process; previously the window was created lazily on whatever
+// short-lived goroutine happened to call balloon() first (e.g. the
+// goroutine running uploadFromClipboard), so once that goroutine
+// returned, the owning thread's identity became unstable and later
+// Shell_NotifyIconW calls silently failed.
+var requests = make(chan balloonRequest, 8)
+
+func init() {
+	go run()
+}
 
 func toUTF16Array(dst []uint16, s string) {
 	u, err := syscall.UTF16FromString(s)
@@ -95,71 +111,81 @@ func defWndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	return r
 }
 
-// ensureWindow lazily creates a hidden message-only-style window used solely
-// as the owner for the notify icon; Shell_NotifyIconW requires a window
-// handle even though this icon is never shown (NIS_HIDDEN).
-func ensureWindow() uintptr {
-	initOnce.Do(func() {
-		className, _ := syscall.UTF16PtrFromString("ClipShotNotify")
-		hInstance, _, _ := procGetModuleHandleW.Call(0)
+func run() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
-		wc := wndClassExW{
-			cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
-			lpfnWndProc:   syscall.NewCallback(defWndProc),
-			hInstance:     syscall.Handle(hInstance),
-			lpszClassName: className,
-		}
-		procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	className, _ := syscall.UTF16PtrFromString("ClipShotNotify")
+	hInstance, _, _ := procGetModuleHandleW.Call(0)
 
-		title, _ := syscall.UTF16PtrFromString("ClipShotNotify")
-		h, _, _ := procCreateWindowExW.Call(
-			0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
-			0, 0, 0, 1, 1, 0, 0, hInstance, 0,
-		)
-		hwnd = h
+	wc := wndClassExW{
+		cbSize:        uint32(unsafe.Sizeof(wndClassExW{})),
+		lpfnWndProc:   syscall.NewCallback(defWndProc),
+		hInstance:     syscall.Handle(hInstance),
+		lpszClassName: className,
+	}
+	if ret, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); ret == 0 {
+		log.Printf("notify: RegisterClassExW failed: %v", err)
+		return
+	}
 
-		var nid notifyIconDataW
-		nid.cbSize = uint32(unsafe.Sizeof(nid))
-		nid.hWnd = hwnd
-		nid.uID = 1
-		nid.uFlags = nifState
-		nid.dwState = nisHidden
-		nid.dwStateMask = nisHidden
-		toUTF16Array(nid.szTip[:], "ClipShot")
-		procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
-	})
-	return hwnd
-}
-
-func balloon(title, msg string, flags uint32) {
-	h := ensureWindow()
-	if h == 0 {
+	title, _ := syscall.UTF16PtrFromString("ClipShotNotify")
+	hwnd, _, err := procCreateWindowExW.Call(
+		0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
+		0, 0, 0, 1, 1, 0, 0, hInstance, 0,
+	)
+	if hwnd == 0 {
+		log.Printf("notify: CreateWindowExW failed: %v", err)
 		return
 	}
 
 	var nid notifyIconDataW
 	nid.cbSize = uint32(unsafe.Sizeof(nid))
-	nid.hWnd = h
+	nid.hWnd = hwnd
 	nid.uID = 1
-	nid.uFlags = nifInfo | nifState
+	nid.uFlags = nifState
 	nid.dwState = nisHidden
 	nid.dwStateMask = nisHidden
-	nid.dwInfoFlags = flags
-	toUTF16Array(nid.szInfoTitle[:], title)
-	toUTF16Array(nid.szInfo[:], msg)
+	toUTF16Array(nid.szTip[:], "ClipShot")
+	if ret, _, err := procShellNotifyIconW.Call(nimAdd, uintptr(unsafe.Pointer(&nid))); ret == 0 {
+		log.Printf("notify: Shell_NotifyIconW(NIM_ADD) failed: %v", err)
+	}
 
-	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+	for req := range requests {
+		var b notifyIconDataW
+		b.cbSize = uint32(unsafe.Sizeof(b))
+		b.hWnd = hwnd
+		b.uID = 1
+		b.uFlags = nifInfo | nifState
+		b.dwState = nisHidden
+		b.dwStateMask = nisHidden
+		b.dwInfoFlags = req.flags
+		toUTF16Array(b.szInfoTitle[:], req.title)
+		toUTF16Array(b.szInfo[:], req.msg)
+
+		if ret, _, err := procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&b))); ret == 0 {
+			log.Printf("notify: Shell_NotifyIconW(NIM_MODIFY) failed: %v", err)
+		}
+	}
+}
+
+func send(title, msg string, flags uint32) {
+	select {
+	case requests <- balloonRequest{title, msg, flags}:
+	default:
+		log.Printf("notify: request queue full, dropping: %s", msg)
+	}
 }
 
 // ShowInfo pops up an informational balloon notification (upload progress,
 // success, etc).
 func ShowInfo(message string) {
-	balloon("ClipShot", message, niifInfo)
+	send("ClipShot", message, niifInfo)
 }
 
 // ShowError pops up an error balloon notification. Unlike ShowInfo, Windows
 // renders this with an error icon and it stays distinguishable in
 // Notification history.
 func ShowError(message string) {
-	balloon("ClipShot", message, niifError)
+	send("ClipShot", message, niifError)
 }
