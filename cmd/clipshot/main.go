@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/Lapius7/clipshot-app/internal/clipboard"
 	"github.com/Lapius7/clipshot-app/internal/config"
@@ -36,19 +38,86 @@ func initLogFile() {
 	log.SetOutput(f)
 }
 
+// restartGuardPath returns the path of a marker file (next to the exe) that
+// records the last self-update restart time, so a version-comparison bug
+// can't spin the app into restarting forever with no visible symptom other
+// than "nothing responds".
+func restartGuardPath() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(exePath), ".clipshot-restart")
+}
+
+const minRestartInterval = 60 * time.Second
+
+func recentlyRestarted() bool {
+	p := restartGuardPath()
+	if p == "" {
+		return false
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return false
+	}
+	sec, err := strconv.ParseInt(string(data), 10, 64)
+	if err != nil {
+		return false
+	}
+	return time.Since(time.Unix(sec, 0)) < minRestartInterval
+}
+
+func markRestart() {
+	p := restartGuardPath()
+	if p == "" {
+		return
+	}
+	_ = os.WriteFile(p, []byte(strconv.FormatInt(time.Now().Unix(), 10)), 0o600)
+}
+
+// checkForUpdate checks GitHub for a newer release and applies it. When
+// silent is true (startup path), it only notifies on update/error, never on
+// "already up to date", to avoid noise on every launch.
+func checkForUpdate(silent bool) {
+	log.Printf("checking for update (current version=%s)", version)
+
+	if silent && recentlyRestarted() {
+		log.Printf("skipping update check: restarted within the last %s", minRestartInterval)
+		return
+	}
+
+	updated, err := updater.CheckAndUpdate()
+	if err != nil {
+		log.Printf("update check failed: %v", err)
+		if !silent {
+			notify.ShowError(fmt.Sprintf("Update check failed: %v", err))
+		}
+		return
+	}
+	if !updated {
+		log.Printf("no update available")
+		if !silent {
+			notify.ShowInfo("You're up to date.")
+		}
+		return
+	}
+
+	log.Printf("update applied, restarting")
+	notify.ShowInfo("Updated! Restarting...")
+	markRestart()
+	exePath, _ := os.Executable()
+	os.StartProcess(exePath, os.Args, &os.ProcAttr{Dir: filepath.Dir(exePath)})
+	os.Exit(0)
+}
+
 func main() {
 	initLogFile()
+	log.Printf("ClipShot v%s starting", version)
 	ui.ValidateHotkey = hotkey.Validate
 	updater.SetVersion(version)
 
-	if updated, err := updater.CheckAndUpdate(); err != nil {
-		log.Printf("update check failed: %v", err)
-	} else if updated {
-		notify.ShowInfo("Updated! Restarting...")
-		exePath, _ := os.Executable()
-		os.StartProcess(exePath, os.Args, &os.ProcAttr{Dir: filepath.Dir(exePath)})
-		return
-	}
+	checkForUpdate(true)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -94,6 +163,10 @@ func main() {
 		startHotkey()
 	}
 
+	onCheckUpdate := func() {
+		checkForUpdate(false)
+	}
+
 	onQuit := func() {
 		if listener != nil {
 			listener.Close()
@@ -101,7 +174,7 @@ func main() {
 	}
 
 	startHotkey()
-	ui.RunTray(trayIcon, onUpload, onSettings, onQuit)
+	ui.RunTray(trayIcon, version, onUpload, onSettings, onCheckUpdate, onQuit)
 }
 
 func uploadFromClipboard(cfg *config.Config) {
