@@ -15,12 +15,22 @@ import (
 	"github.com/Lapius7/clipshot-app/internal/credstore"
 	"github.com/Lapius7/clipshot-app/internal/hotkey"
 	"github.com/Lapius7/clipshot-app/internal/notify"
+	"github.com/Lapius7/clipshot-app/internal/singleton"
 	"github.com/Lapius7/clipshot-app/internal/ui"
 	"github.com/Lapius7/clipshot-app/internal/updater"
 	"github.com/Lapius7/clipshot-app/internal/uploader"
 )
 
 var version = "dev"
+
+// showError logs the error and pops up a balloon notification. Balloon
+// notifications alone proved unreliable to diagnose (see the v0.1.5/v0.1.6
+// notify fixes), so every error shown to the user is now also recorded in
+// clipshot.log.
+func showError(message string) {
+	log.Printf("error: %s", message)
+	notify.ShowError(message)
+}
 
 // initLogFile redirects the standard logger to clipshot.log next to the
 // executable. The app is built with -H windowsgui (no console), so without
@@ -114,6 +124,13 @@ func checkForUpdate(silent bool) {
 func main() {
 	initLogFile()
 	log.Printf("ClipShot v%s starting", version)
+
+	if !singleton.Acquire() {
+		log.Printf("another instance is already running, exiting")
+		notify.ShowError("ClipShot is already running.")
+		return
+	}
+
 	ui.ValidateHotkey = hotkey.Validate
 	updater.SetVersion(version)
 
@@ -136,7 +153,7 @@ func main() {
 		}
 		l, ch, err := hotkey.Register(cfg.Hotkey)
 		if err != nil {
-			log.Printf("failed to register hotkey %q: %v", cfg.Hotkey, err)
+			showError(fmt.Sprintf("Hotkey registration failed (%s): %v", cfg.Hotkey, err))
 			return
 		}
 		listener = l
@@ -151,7 +168,7 @@ func main() {
 		path, err := ui.PickImageFile()
 		if err != nil {
 			if !errors.Is(err, ui.ErrNoFileSelected) {
-				notify.ShowError(err.Error())
+				showError(fmt.Sprintf("File picker failed: %v", err))
 			}
 			return
 		}
@@ -178,11 +195,12 @@ func main() {
 }
 
 func uploadFromClipboard(cfg *config.Config) {
+	log.Printf("upload: starting from clipboard")
 	notify.ShowInfo("Uploading...")
 
 	data, err := clipboard.ReadImagePNG()
 	if err != nil {
-		notify.ShowError(err.Error())
+		showError(fmt.Sprintf("Clipboard read failed: %v", err))
 		return
 	}
 
@@ -190,11 +208,12 @@ func uploadFromClipboard(cfg *config.Config) {
 }
 
 func uploadFromFile(cfg *config.Config, path string) {
+	log.Printf("upload: starting from file %q", path)
 	notify.ShowInfo("Uploading...")
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		notify.ShowError(fmt.Sprintf("Read error: %v", err))
+		showError(fmt.Sprintf("Read error: %v", err))
 		return
 	}
 
@@ -205,24 +224,25 @@ func uploadFromFile(cfg *config.Config, path string) {
 func uploadAndNotify(cfg *config.Config, filename, contentType string, data []byte) {
 	token, err := credstore.LoadToken(cfg.InstanceURL)
 	if err != nil {
-		notify.ShowError("No API token - open Settings")
+		showError("No API token - open Settings")
 		return
 	}
 
 	client, err := uploader.New(cfg.InstanceURL, token)
 	if err != nil {
-		notify.ShowError(err.Error())
+		showError(fmt.Sprintf("Uploader init failed: %v", err))
 		return
 	}
 
 	url, err := client.Upload(filename, contentType, data)
 	if err != nil {
-		notify.ShowError(fmt.Sprintf("Upload failed: %v", err))
+		showError(fmt.Sprintf("Upload failed: %v", err))
 		return
 	}
+	log.Printf("upload: succeeded, url=%s", url)
 
 	if err := clipboard.WriteText(url); err != nil {
-		notify.ShowError("Uploaded but clipboard failed")
+		showError(fmt.Sprintf("Uploaded but clipboard write failed: %v", err))
 		return
 	}
 
