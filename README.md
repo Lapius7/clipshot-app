@@ -22,6 +22,7 @@ A Windows tray client written in Go. Press a hotkey, and whatever image is curre
 - [Security model](#security-model)
 - [Troubleshooting](#troubleshooting)
 - [Project layout](#project-layout)
+- [Downloads & verifying releases](#downloads--verifying-releases)
 - [Roadmap / known limitations](#roadmap--known-limitations)
 - [Contributing](#contributing)
 - [License](#license)
@@ -157,6 +158,51 @@ internal/notify/           User feedback via a temporary tray tooltip change
 ```
 
 Non-Windows builds compile against stub implementations in `_other.go` files (returning "unsupported" errors) purely so the code is inspectable/testable from any OS — the app is only ever meant to run on Windows.
+
+## Downloads & verifying releases
+
+Prebuilt binaries are published on the [Releases page](https://github.com/Lapius7/clipshot-app/releases). **Do not download `clipshot.exe` from anywhere else** — there is no official mirror, no third-party download site, and no auto-updater. If you find this binary hosted elsewhere, treat it as untrusted.
+
+### This binary is not code-signed
+
+`clipshot.exe` is **not signed with a code-signing certificate** (see [Roadmap](#roadmap--known-limitations)). This means:
+
+- Windows SmartScreen will very likely show an "unrecognized app" warning on first run. This is expected for an unsigned binary from a small open-source project, not necessarily a sign of tampering — but it also means Windows itself is not vouching for the publisher's identity the way it would for a signed binary.
+- You are relying on the checksum below (and, ideally, building from source yourself) rather than a signature chain to know the binary matches what this repository produced.
+
+If your threat model requires a verified publisher identity, build from source instead (see [Installing / building](#installing--building)) until signed releases are available.
+
+### Verifying a downloaded binary
+
+Every release includes a `SHA256SUMS.txt` alongside `clipshot.exe`. After downloading, verify the hash matches before running it:
+
+**PowerShell:**
+```powershell
+Get-FileHash .\clipshot.exe -Algorithm SHA256
+```
+
+**Linux/macOS/WSL:**
+```bash
+sha256sum clipshot.exe
+# or, to check directly against the published file:
+sha256sum -c SHA256SUMS.txt
+```
+
+Compare the result against the matching line in that release's `SHA256SUMS.txt` on the [Releases page](https://github.com/Lapius7/clipshot-app/releases). If it doesn't match exactly, do not run the file — re-download it, and if the mismatch persists, open an issue.
+
+### Reproducing a release build yourself
+
+Since the build is just `go build` with no platform-specific toolchain quirks (no CGO), you can reproduce a given tag's binary and compare hashes yourself:
+
+```bash
+git clone https://github.com/Lapius7/clipshot-app.git
+cd clipshot-app
+git checkout v0.1.0   # match the release tag you downloaded
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-H windowsgui -s -w" -o clipshot.exe ./cmd/clipshot/...
+sha256sum clipshot.exe
+```
+
+Go's toolchain does not currently guarantee bit-for-bit reproducible builds across all environments/Go versions, so a mismatch here isn't automatically a red flag — but a match is strong independent confirmation that the published binary corresponds to this source tree.
 
 ## Roadmap / known limitations
 
