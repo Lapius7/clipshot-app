@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"sync"
+
 	"github.com/getlantern/systray"
 )
 
@@ -18,13 +20,38 @@ func RunTray(iconData []byte, onUpload func(), onSettings func(), onQuit func())
 		systray.AddSeparator()
 		mQuit := systray.AddMenuItem("Quit", "Exit ClipShot")
 
+		// onUpload/onSettings open blocking native dialogs, so each click is
+		// dispatched to its own goroutine. That keeps this select loop free
+		// to keep handling menu clicks (including Quit) while a dialog is
+		// open. busy guards against opening the same dialog twice at once.
+		var busyMu sync.Mutex
+		busy := false
+		runExclusive := func(fn func()) {
+			busyMu.Lock()
+			if busy {
+				busyMu.Unlock()
+				return
+			}
+			busy = true
+			busyMu.Unlock()
+
+			go func() {
+				defer func() {
+					busyMu.Lock()
+					busy = false
+					busyMu.Unlock()
+				}()
+				fn()
+			}()
+		}
+
 		go func() {
 			for {
 				select {
 				case <-mUpload.ClickedCh:
-					onUpload()
+					runExclusive(onUpload)
 				case <-mSettings.ClickedCh:
-					onSettings()
+					runExclusive(onSettings)
 				case <-mQuit.ClickedCh:
 					systray.Quit()
 					return
